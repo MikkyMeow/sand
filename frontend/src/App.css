@@ -1,0 +1,97 @@
+:root {
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+}
+
+#root {
+  width: 100%;
+}
+
+.app-shell {
+  position: relative;
+  min-height: 100vh;
+  background: radial-gradient(circle at top, #0f1624, #05070d 60%);
+  color: #f8f9ff;
+  overflow: hidden;
+}
+
+.render-surface {
+  width: 100%;
+  height: 100vh;
+  display: block;
+}
+
+.hud {
+  position: absolute;
+  inset: 2rem auto auto 2rem;
+  width: min(28rem, calc(100% - 3rem));
+  background: rgba(5, 10, 17, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 30px 80px rgba(5, 9, 22, 0.55);
+  padding: 1.5rem;
+  border-radius: 1rem;
+  backdrop-filter: blur(12px);
+}
+
+.hud h1 {
+  margin: 0.25rem 0 0.5rem;
+  font-size: 1.8rem;
+}
+
+.hud p {
+  margin: 0;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.actions {
+  margin-top: 1.2rem;
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.actions a {
+  color: #fff;
+  text-decoration: none;
+  font-weight: 600;
+  padding: 0.5rem 0.85rem;
+  border-radius: 0.75rem;
+  background: rgba(103, 152, 255, 0.18);
+  border: 1px solid rgba(125, 173, 255, 0.35);
+}
+
+.actions a:hover {
+  background: rgba(103, 152, 255, 0.32);
+}
+
+.status {
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  margin: 0;
+  color: #ebeefc;
+  opacity: 0.85;
+}
+
+.status-connected {
+  color: #8ef6c3;
+}
+
+.status-disconnected {
+  color: #ff9e9e;
+}
+
+.status-connecting {
+  color: #ffd27d;
+}
+
+@media (max-width: 768px) {
+  .hud {
+    inset: auto 1rem 1rem 1rem;
+    width: calc(100% - 2rem);
+  }
+
+  .render-surface {
+    height: 90vh;
+  }
+}

@@ -1,0 +1,14 @@
+node_modules
+dist
+build
+.env
+.env.*
+!*.env.example
+!*/.env.example
+android
+ios
+/frontend/node_modules
+/frontend/dist
+/frontend/.vite
+/backend/node_modules
+/backend/dist
