@@ -1,5 +1,5 @@
 import Fastify from 'fastify'
-import cors from '@fastify/cors'
+import cors, { FastifyCorsOptions } from '@fastify/cors'
 import { Server } from 'socket.io'
 import { z } from 'zod'
 import { env } from './config/env'
@@ -10,8 +10,20 @@ const fastify = Fastify({
 })
 
 const bootstrap = async () => {
+  const allowedOrigins = env.CLIENT_ORIGINS
+  const isWildcardOrigin = allowedOrigins.includes('*')
+  const fastifyCorsOrigin: FastifyCorsOptions['origin'] = isWildcardOrigin
+    ? true
+    : (origin, cb) => {
+        if (!origin || allowedOrigins.includes(origin)) {
+          cb(null, true)
+          return
+        }
+        cb(new Error('Origin not allowed by CORS'), false)
+      }
+
   await fastify.register(cors, {
-    origin: env.CLIENT_ORIGINS,
+    origin: fastifyCorsOrigin,
   })
 
   fastify.get('/health', async () => ({
@@ -21,7 +33,7 @@ const bootstrap = async () => {
 
   const io = new Server(fastify.server, {
     cors: {
-      origin: env.CLIENT_ORIGINS,
+      origin: isWildcardOrigin ? '*' : allowedOrigins,
     },
   })
 

@@ -4,6 +4,7 @@ import {
   Color3,
   Engine,
   HemisphericLight,
+  Mesh,
   MeshBuilder,
   Scene,
   StandardMaterial,
@@ -20,6 +21,17 @@ const HERO_HALF_HEIGHT = HERO_SIZE / 2
 const MOVE_SPEED = 4
 const GRAVITY = -12
 const JUMP_SPEED = 6
+type PlayerSnapshot = {
+  id: string
+  position: { x: number; y: number; z: number }
+  rotationY: number
+  health: number
+}
+
+type WorldSnapshot = {
+  updatedAt: number
+  players: PlayerSnapshot[]
+}
 
 function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -38,6 +50,18 @@ function App() {
   const jumpRequestRef = useRef(false)
   const joystickPointerIdRef = useRef<number | null>(null)
   const joystickBaseRef = useRef<HTMLDivElement | null>(null)
+  const heroMeshRef = useRef<Mesh | null>(null)
+  const sceneRef = useRef<Scene | null>(null)
+  const remotePlayersRef = useRef(new Map<string, Mesh>())
+  const remoteHeroMaterialRef = useRef<StandardMaterial | null>(null)
+  const socketRef = useRef<ReturnType<typeof io> | null>(null)
+  const playerIdRef = useRef<string | null>(null)
+  const pendingWorldSnapshotRef = useRef<PlayerSnapshot[] | null>(null)
+  const lastSyncedStateRef = useRef({
+    position: { x: 0, y: 0, z: 0 },
+    rotationY: 0,
+    timestamp: 0,
+  })
 
   const recomputeMovementVector = useCallback(() => {
     const combinedX = keyboardAxisRef.current.x + joystickAxisRef.current.x
@@ -66,6 +90,54 @@ function App() {
     setJoystickEngaged(false)
     recomputeMovementVector()
   }, [recomputeMovementVector])
+
+  const disposeRemotePlayer = useCallback((playerId: string) => {
+    const mesh = remotePlayersRef.current.get(playerId)
+    if (!mesh) {
+      return
+    }
+    mesh.dispose()
+    remotePlayersRef.current.delete(playerId)
+  }, [])
+
+  const syncRemotePlayers = useCallback(
+    (players: PlayerSnapshot[]) => {
+      const scene = sceneRef.current
+      const remoteMaterial = remoteHeroMaterialRef.current
+      if (!scene || !remoteMaterial) {
+        pendingWorldSnapshotRef.current = players
+        return
+      }
+
+      const remotePlayers = remotePlayersRef.current
+      const activeIds = new Set<string>()
+
+      players.forEach((player) => {
+        if (player.id === playerIdRef.current) {
+          return
+        }
+
+        activeIds.add(player.id)
+        let mesh = remotePlayers.get(player.id)
+        if (!mesh) {
+          mesh = MeshBuilder.CreateBox(`remote-${player.id}`, { size: HERO_SIZE }, scene)
+          mesh.material = remoteMaterial
+          remotePlayers.set(player.id, mesh)
+        }
+
+        mesh.position.set(player.position.x, player.position.y, player.position.z)
+        mesh.rotation.y = player.rotationY ?? 0
+      })
+
+      remotePlayers.forEach((mesh, id) => {
+        if (!activeIds.has(id)) {
+          mesh.dispose()
+          remotePlayers.delete(id)
+        }
+      })
+    },
+    [],
+  )
 
   const updateJoystickFromEvent = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
@@ -164,6 +236,7 @@ function App() {
 
     const engine = new Engine(canvas, true)
     const scene = new Scene(engine)
+    sceneRef.current = scene
     scene.clearColor = Color3.FromHexString('#070b12').toColor4(1)
 
     const camera = new ArcRotateCamera(
@@ -202,6 +275,19 @@ function App() {
     hero.position.y = HERO_HALF_HEIGHT
     camera.setTarget(hero.position.clone())
     camera.lockedTarget = hero
+    heroMeshRef.current = hero
+
+    const remoteHeroMaterial = new StandardMaterial('remoteHeroMaterial', scene)
+    remoteHeroMaterial.diffuseColor = Color3.FromHexString('#7dd3ff')
+    remoteHeroMaterial.emissiveColor = Color3.FromHexString('#2563eb')
+    remoteHeroMaterial.alpha = 0.95
+    remoteHeroMaterialRef.current = remoteHeroMaterial
+    remotePlayersRef.current = new Map()
+    if (pendingWorldSnapshotRef.current) {
+      const queued = pendingWorldSnapshotRef.current
+      pendingWorldSnapshotRef.current = null
+      syncRemotePlayers(queued)
+    }
 
     const crosshair = MeshBuilder.CreateDisc(
       'crosshair',
@@ -256,6 +342,30 @@ function App() {
       crosshair.position.copyFrom(hero.position)
       crosshair.position.y += 1.2
       camera.target.copyFrom(hero.position)
+
+      const socket = socketRef.current
+      if (socket && playerIdRef.current) {
+        const now = performance.now()
+        const lastState = lastSyncedStateRef.current
+        const positionDelta =
+          Math.abs(hero.position.x - lastState.position.x) +
+          Math.abs(hero.position.y - lastState.position.y) +
+          Math.abs(hero.position.z - lastState.position.z)
+        const rotationDelta = Math.abs(hero.rotation.y - lastState.rotationY)
+        if (now - lastState.timestamp > 50 || positionDelta > 0.01 || rotationDelta > 0.01) {
+          lastState.position = {
+            x: hero.position.x,
+            y: hero.position.y,
+            z: hero.position.z,
+          }
+          lastState.rotationY = hero.rotation.y
+          lastState.timestamp = now
+          socket.emit('player:update', {
+            position: lastState.position,
+            rotationY: lastState.rotationY,
+          })
+        }
+      }
     })
 
     const ui = AdvancedDynamicTexture.CreateFullscreenUI('ui', true, scene)
@@ -275,9 +385,14 @@ function App() {
 
     return () => {
       window.removeEventListener('resize', handleResize)
+      remotePlayersRef.current.forEach((mesh) => mesh.dispose())
+      remotePlayersRef.current.clear()
+      heroMeshRef.current = null
+      remoteHeroMaterialRef.current = null
+      sceneRef.current = null
       engine.dispose()
     }
-  }, [])
+  }, [syncRemotePlayers])
 
   useEffect(() => {
     const keyboardState = {
@@ -368,24 +483,45 @@ function App() {
     const socket = io(MULTIPLAYER_URL, {
       autoConnect: true,
     })
+    socketRef.current = socket
 
     const handleConnect = () => setConnectionState('connected')
-    const handleDisconnect = () => setConnectionState('disconnected')
+    const handleDisconnect = () => {
+      setConnectionState('disconnected')
+      playerIdRef.current = null
+      remotePlayersRef.current.forEach((mesh) => mesh.dispose())
+      remotePlayersRef.current.clear()
+    }
+
+    const handleSessionJoined = (payload: { playerId: string; snapshot: WorldSnapshot }) => {
+      playerIdRef.current = payload.playerId
+      syncRemotePlayers(payload.snapshot.players)
+    }
+
+    const handleWorldState = (snapshot: WorldSnapshot) => {
+      syncRemotePlayers(snapshot.players)
+    }
+
+    const handlePlayerLeft = (payload: { playerId: string }) => {
+      disposeRemotePlayer(payload.playerId)
+    }
 
     socket.on('connect', handleConnect)
     socket.on('disconnect', handleDisconnect)
-
-    // Placeholder for future world state updates from the backend server
-    socket.on('world:state', (payload) => {
-      console.debug('Received world update', payload)
-    })
+    socket.on('session:joined', handleSessionJoined)
+    socket.on('world:state', handleWorldState)
+    socket.on('player:left', handlePlayerLeft)
 
     return () => {
       socket.off('connect', handleConnect)
       socket.off('disconnect', handleDisconnect)
+      socket.off('session:joined', handleSessionJoined)
+      socket.off('world:state', handleWorldState)
+      socket.off('player:left', handlePlayerLeft)
       socket.disconnect()
+      socketRef.current = null
     }
-  }, [])
+  }, [disposeRemotePlayer, syncRemotePlayers])
 
   return (
     <div className="app-shell">

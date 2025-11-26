@@ -28,7 +28,7 @@ export class WorldState {
     const id = randomUUID()
     const spawnPosition: Vector3 = {
       x: clamp((Math.random() - 0.5) * this.arenaRadius * 2, -this.arenaRadius, this.arenaRadius),
-      y: 0,
+      y: 0.3,
       z: clamp((Math.random() - 0.5) * this.arenaRadius * 2, -this.arenaRadius, this.arenaRadius),
     }
 
