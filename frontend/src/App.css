@@ -85,6 +85,69 @@
   color: #ffd27d;
 }
 
+.touch-controls {
+  position: absolute;
+  inset: auto 2rem 2rem 2rem;
+  display: flex;
+  justify-content: space-between;
+  pointer-events: none;
+  gap: 1.5rem;
+}
+
+.joystick {
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  background: rgba(16, 27, 42, 0.8);
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  position: relative;
+  pointer-events: auto;
+  touch-action: none;
+  box-shadow: inset 0 0 25px rgba(8, 15, 28, 0.8);
+}
+
+.joystick::after {
+  content: '';
+  position: absolute;
+  inset: 12px;
+  border-radius: 50%;
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+}
+
+.joystick-active {
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.joystick-handle {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: linear-gradient(145deg, #4e7cff, #86a7ff);
+  position: absolute;
+  left: calc(50% - 27px);
+  top: calc(50% - 27px);
+  box-shadow: 0 6px 16px rgba(16, 33, 76, 0.35);
+  transition: transform 60ms ease;
+}
+
+.jump-button {
+  pointer-events: auto;
+  align-self: flex-end;
+  min-width: 120px;
+  min-height: 120px;
+  border-radius: 50%;
+  border: none;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #0d1525;
+  background: linear-gradient(145deg, #ffdd78, #ffb347);
+  box-shadow: 0 12px 30px rgba(255, 193, 79, 0.45);
+}
+
+.jump-button:active {
+  transform: scale(0.96);
+}
+
 @media (max-width: 768px) {
   .hud {
     inset: auto 1rem 1rem 1rem;
@@ -93,5 +156,9 @@
 
   .render-surface {
     height: 90vh;
+  }
+
+  .touch-controls {
+    inset: auto 1rem 1.5rem 1rem;
   }
 }

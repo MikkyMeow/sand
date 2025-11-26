@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArcRotateCamera,
   Color3,
@@ -15,14 +15,146 @@ import './App.css'
 
 const MULTIPLAYER_URL =
   import.meta.env.VITE_MULTIPLAYER_URL ?? 'http://localhost:4000'
+const HERO_SIZE = 0.6
+const HERO_HALF_HEIGHT = HERO_SIZE / 2
+const MOVE_SPEED = 4
+const GRAVITY = -12
+const JUMP_SPEED = 6
 
 function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const [connectionState, setConnectionState] = useState<
     'connecting' | 'connected' | 'disconnected'
   >('connecting')
+  const [isTouchInterface, setIsTouchInterface] = useState(false)
+  const [joystickOffset, setJoystickOffset] = useState({ x: 0, y: 0 })
+  const [joystickEngaged, setJoystickEngaged] = useState(false)
+
   const networkStateRef = useRef(connectionState)
   networkStateRef.current = connectionState
+  const movementVectorRef = useRef({ x: 0, z: 0 })
+  const keyboardAxisRef = useRef({ x: 0, z: 0 })
+  const joystickAxisRef = useRef({ x: 0, z: 0 })
+  const jumpRequestRef = useRef(false)
+  const joystickPointerIdRef = useRef<number | null>(null)
+  const joystickBaseRef = useRef<HTMLDivElement | null>(null)
+
+  const recomputeMovementVector = useCallback(() => {
+    const combinedX = keyboardAxisRef.current.x + joystickAxisRef.current.x
+    const combinedZ = keyboardAxisRef.current.z + joystickAxisRef.current.z
+    const length = Math.hypot(combinedX, combinedZ)
+
+    if (length > 1) {
+      movementVectorRef.current.x = combinedX / length
+      movementVectorRef.current.z = combinedZ / length
+      return
+    }
+
+    movementVectorRef.current.x = combinedX
+    movementVectorRef.current.z = combinedZ
+  }, [])
+
+  const requestJump = useCallback(() => {
+    jumpRequestRef.current = true
+  }, [])
+
+  const resetJoystick = useCallback(() => {
+    joystickPointerIdRef.current = null
+    joystickAxisRef.current.x = 0
+    joystickAxisRef.current.z = 0
+    setJoystickOffset({ x: 0, y: 0 })
+    setJoystickEngaged(false)
+    recomputeMovementVector()
+  }, [recomputeMovementVector])
+
+  const updateJoystickFromEvent = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      const base = joystickBaseRef.current
+      if (!base) {
+        return
+      }
+
+      const rect = base.getBoundingClientRect()
+      const centerX = rect.left + rect.width / 2
+      const centerY = rect.top + rect.height / 2
+      const deltaX = event.clientX - centerX
+      const deltaY = event.clientY - centerY
+      const maxDistance = rect.width / 2
+
+      let normalizedX = deltaX / maxDistance
+      let normalizedY = deltaY / maxDistance
+      const magnitude = Math.hypot(normalizedX, normalizedY)
+      if (magnitude > 1) {
+        normalizedX /= magnitude
+        normalizedY /= magnitude
+      }
+
+      joystickAxisRef.current.x = normalizedX
+      joystickAxisRef.current.z = -normalizedY
+      setJoystickOffset({
+        x: normalizedX * maxDistance,
+        y: normalizedY * maxDistance,
+      })
+      setJoystickEngaged(true)
+      recomputeMovementVector()
+    },
+    [recomputeMovementVector],
+  )
+
+  const handleJoystickPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (joystickPointerIdRef.current !== null) {
+        return
+      }
+
+      event.preventDefault()
+      joystickPointerIdRef.current = event.pointerId
+      event.currentTarget.setPointerCapture(event.pointerId)
+      updateJoystickFromEvent(event)
+    },
+    [updateJoystickFromEvent],
+  )
+
+  const handleJoystickPointerMove = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.pointerId !== joystickPointerIdRef.current) {
+        return
+      }
+
+      event.preventDefault()
+      updateJoystickFromEvent(event)
+    },
+    [updateJoystickFromEvent],
+  )
+
+  const handleJoystickPointerUp = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.pointerId !== joystickPointerIdRef.current) {
+        return
+      }
+
+      event.preventDefault()
+      try {
+        event.currentTarget.releasePointerCapture(event.pointerId)
+      } catch {
+        // Pointer capture might already be released — ignore.
+      }
+      resetJoystick()
+    },
+    [resetJoystick],
+  )
+
+  useEffect(() => {
+    const media = window.matchMedia('(pointer: coarse)')
+    const updatePreference = () => {
+      const hasTouch = navigator.maxTouchPoints > 0
+      setIsTouchInterface(media.matches || hasTouch)
+    }
+
+    updatePreference()
+    media.addEventListener('change', updatePreference)
+    return () => media.removeEventListener('change', updatePreference)
+  }, [])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -65,9 +197,11 @@ function App() {
     heroMaterial.diffuseColor = Color3.FromHexString('#ffce6d')
     heroMaterial.emissiveColor = Color3.FromHexString('#99582a')
 
-    const hero = MeshBuilder.CreateBox('hero', { size: 0.6 }, scene)
+    const hero = MeshBuilder.CreateBox('hero', { size: HERO_SIZE }, scene)
     hero.material = heroMaterial
-    hero.position.y = 0.35
+    hero.position.y = HERO_HALF_HEIGHT
+    camera.setTarget(hero.position.clone())
+    camera.lockedTarget = hero
 
     const crosshair = MeshBuilder.CreateDisc(
       'crosshair',
@@ -80,12 +214,48 @@ function App() {
     crosshair.material = crosshairMaterial
     crosshair.position = new Vector3(0, hero.position.y + 1.2, 0)
 
-    let elapsed = 0
+    let verticalVelocity = 0
     scene.onBeforeRenderObservable.add(() => {
-      const delta = engine.getDeltaTime()
-      elapsed += delta
-      hero.rotate(Vector3.Up(), delta * 0.001)
-      crosshair.position.x = Math.sin(elapsed * 0.002) * 0.4
+      const deltaSeconds = engine.getDeltaTime() / 1000
+
+      const forward = camera.getForwardRay().direction
+      forward.y = 0
+      forward.normalize()
+      const right = Vector3.Cross(Vector3.Up(), forward).normalize()
+
+      const movement = movementVectorRef.current
+      const hasMovement =
+        Math.abs(movement.x) > 0.001 || Math.abs(movement.z) > 0.001
+
+      if (hasMovement) {
+        const direction = forward
+          .scale(movement.z)
+          .add(right.scale(movement.x))
+        direction.normalize()
+        hero.position.addInPlace(direction.scale(MOVE_SPEED * deltaSeconds))
+        const heroYaw = Math.atan2(direction.x, direction.z)
+        hero.rotation.y = heroYaw
+      }
+
+      verticalVelocity += GRAVITY * deltaSeconds
+      const nextY = hero.position.y + verticalVelocity * deltaSeconds
+      const isGrounded = nextY <= HERO_HALF_HEIGHT
+
+      if (jumpRequestRef.current && isGrounded) {
+        verticalVelocity = JUMP_SPEED
+        jumpRequestRef.current = false
+      }
+
+      if (isGrounded && verticalVelocity <= 0) {
+        hero.position.y = HERO_HALF_HEIGHT
+        verticalVelocity = 0
+      } else {
+        hero.position.y = nextY
+      }
+
+      crosshair.position.copyFrom(hero.position)
+      crosshair.position.y += 1.2
+      camera.target.copyFrom(hero.position)
     })
 
     const ui = AdvancedDynamicTexture.CreateFullscreenUI('ui', true, scene)
@@ -108,6 +278,91 @@ function App() {
       engine.dispose()
     }
   }, [])
+
+  useEffect(() => {
+    const keyboardState = {
+      forward: false,
+      backward: false,
+      left: false,
+      right: false,
+    }
+
+    const handleKeyChange = () => {
+      keyboardAxisRef.current.x =
+        (keyboardState.right ? 1 : 0) - (keyboardState.left ? 1 : 0)
+      keyboardAxisRef.current.z =
+        (keyboardState.forward ? 1 : 0) - (keyboardState.backward ? 1 : 0)
+      recomputeMovementVector()
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      switch (event.code) {
+        case 'KeyW':
+        case 'ArrowUp':
+          keyboardState.forward = true
+          handleKeyChange()
+          break
+        case 'KeyS':
+        case 'ArrowDown':
+          keyboardState.backward = true
+          handleKeyChange()
+          break
+        case 'KeyA':
+        case 'ArrowLeft':
+          keyboardState.left = true
+          handleKeyChange()
+          break
+        case 'KeyD':
+        case 'ArrowRight':
+          keyboardState.right = true
+          handleKeyChange()
+          break
+        case 'Space':
+          event.preventDefault()
+          requestJump()
+          break
+        default:
+          break
+      }
+    }
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      switch (event.code) {
+        case 'KeyW':
+        case 'ArrowUp':
+          keyboardState.forward = false
+          handleKeyChange()
+          break
+        case 'KeyS':
+        case 'ArrowDown':
+          keyboardState.backward = false
+          handleKeyChange()
+          break
+        case 'KeyA':
+        case 'ArrowLeft':
+          keyboardState.left = false
+          handleKeyChange()
+          break
+        case 'KeyD':
+        case 'ArrowRight':
+          keyboardState.right = false
+          handleKeyChange()
+          break
+        case 'Space':
+          event.preventDefault()
+          break
+        default:
+          break
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
+    }
+  }, [recomputeMovementVector, requestJump])
 
   useEffect(() => {
     const socket = io(MULTIPLAYER_URL, {
@@ -157,6 +412,36 @@ function App() {
           </a>
         </div>
       </section>
+      {isTouchInterface && (
+        <div className="touch-controls" aria-hidden={!isTouchInterface}>
+          <div
+            ref={joystickBaseRef}
+            className={`joystick ${joystickEngaged ? 'joystick-active' : ''}`}
+            onPointerDown={handleJoystickPointerDown}
+            onPointerMove={handleJoystickPointerMove}
+            onPointerUp={handleJoystickPointerUp}
+            onPointerCancel={handleJoystickPointerUp}
+            onPointerLeave={handleJoystickPointerUp}
+          >
+            <div
+              className="joystick-handle"
+              style={{
+                transform: `translate3d(${joystickOffset.x}px, ${joystickOffset.y}px, 0)`,
+              }}
+            />
+          </div>
+          <button
+            type="button"
+            className="jump-button"
+            onPointerDown={(event) => {
+              event.preventDefault()
+              requestJump()
+            }}
+          >
+            Прыжок
+          </button>
+        </div>
+      )}
     </div>
   )
 }
